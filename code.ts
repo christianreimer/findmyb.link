@@ -61,12 +61,16 @@ let phoneColorTimeoutId: number | null = null;
 let shouldPauseBackground: boolean = true; // Paused by default (WELCOME state)
 let countdownIntervalId: number | null = null;
 let currentAnimationId: number = 0; // Track the current animation to cancel old ones
-let startTime: number;
 
-const playButton = document.getElementById('playButton')!;
-const cancelButton = document.getElementById('cancelButton')!;
-const countdownText = document.getElementById('countdownText')!;
-const instructions = document.getElementById('instructions')!;
+function getRequiredElement(id: string): HTMLElement {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`Required element #${id} not found`);
+    return el;
+}
+const playButton = getRequiredElement('playButton');
+const cancelButton = getRequiredElement('cancelButton');
+const countdownText = getRequiredElement('countdownText');
+const instructions = getRequiredElement('instructions');
 
 // Constants for instruction text
 const INSTRUCTIONS = {
@@ -77,7 +81,7 @@ const INSTRUCTIONS = {
                 colors) that can be sent to one (or more) people.</p>
 
             <p class="mt-2">Share the Find My Blink and their phone will synchronize with your flashing. Hold up
-                you phone screen to help them find you.</p>
+                your phone screen to help them find you.</p>
 
             <p class="mt-2">No account is needed, no information is stored.</p>
         </div>
@@ -110,6 +114,10 @@ function updateUI(): void {
             shouldPauseBackground = true;
             isBackgroundFlashing = false;
             body.style.backgroundColor = defaultColor;
+            // Restart phone color animation
+            if (phoneColorTimeoutId === null) {
+                animatePhoneColor();
+            }
             break;
 
         case State.COUNTDOWN:
@@ -127,6 +135,13 @@ function updateUI(): void {
             instructions.classList.add('hidden');
             countdownText.classList.add('hidden');
             shouldPauseBackground = false;
+            // Stop phone color animation during running state
+            if (phoneColorTimeoutId !== null) {
+                clearTimeout(phoneColorTimeoutId);
+                phoneColorTimeoutId = null;
+            }
+            const phoneHolder = document.getElementById('phoneHolder');
+            if (phoneHolder) phoneHolder.style.color = 'white';
             break;
     }
 }
@@ -143,9 +158,10 @@ function setState(newState: State): void {
 async function handlePlayClick() {
     // Initialize blinkConfig on first play if it's not set (for INITIATOR role)
     if (blinkConfig === null && currentRole === Role.INITIATOR) {
+        const colors = getRandomColors();
         blinkConfig = {
-            color1: getRandomColors().color1,
-            color2: getRandomColors().color2,
+            color1: colors.color1,
+            color2: colors.color2,
             pattern: getRandomPattern(),
             timeOffset: Math.floor(Math.random() * 5)
         };
@@ -167,7 +183,7 @@ async function handlePlayClick() {
     currentAnimationId++;
 
     if (blinkConfig) {
-        startTime = getNextStartTime(blinkConfig.timeOffset);
+        const startTime = getNextStartTime(blinkConfig.timeOffset);
         // console.log(`Starttime: ${new Date(startTime).toLocaleTimeString()}`);
         startCountdown(startTime);
         animateBackgroundColor(blinkConfig, startTime, currentAnimationId);
@@ -271,7 +287,8 @@ function getNextStartTime(digit: number): number {
     // Start checking from the next full second
     let candidateSecond = currentSecond + 1;
 
-    // Find the next second that ends in digit1 or digit2
+    // Find the next second that ends in digit1 or digit2.
+    // Guaranteed to terminate within 5 iterations since digit1 and digit2 are 5 apart.
     while (true) {
         const lastDigit = candidateSecond % 10;
         if (lastDigit === digit1 || lastDigit === digit2) {
@@ -291,14 +308,6 @@ function animatePhoneColor(): void {
 
     function changeColor() {
         if (!phoneHolder) return;
-
-        // If state is RUNNING, set phone to white and stop color animation
-        if (currentState === State.RUNNING) {
-            phoneHolder.style.color = 'white';
-            // Check again later to resume when state changes
-            phoneColorTimeoutId = setTimeout(changeColor, 100);
-            return;
-        }
 
         // Pick a random color from the COLORS array
         const randomColor = COLORS[Math.floor(Math.random() * COLORS.length)];
@@ -355,74 +364,72 @@ function animateBackgroundColor(config: BlinkConfig, startTime: number, animatio
     const defaultColor = getComputedStyle(document.documentElement).getPropertyValue('--color-base-200');
 
     async function runPattern(): Promise<void> {
-        // Check if this animation has been cancelled or should pause
-        if (animationId !== currentAnimationId) return;
-
-        if (shouldPauseBackground) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-            runPattern();
-            return;
-        }
-
-        // Wait until start time
-        const now = Date.now();
-        const waitTime = startTime - now;
-        if (waitTime > 0) {
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-        }
-
-        // Check again after waiting
-        if (animationId !== currentAnimationId || shouldPauseBackground) {
-            if (shouldPauseBackground) {
-                await new Promise(resolve => setTimeout(resolve, 100));
-                runPattern();
-            }
-            return;
-        }
-
-        // Start flashing
-        isBackgroundFlashing = true;
-        if (phoneHolder) phoneHolder.style.color = 'white';
-        setState(State.RUNNING);
-
-        // Run the pattern
-        let currentColor = color1Value;
-        for (let i = 0; i < config.pattern.length; i++) {
-            if (animationId !== currentAnimationId) {
-                body.style.backgroundColor = defaultColor;
-                isBackgroundFlashing = false;
-                return;
-            }
+        while (true) {
+            // Check if this animation has been cancelled
+            if (animationId !== currentAnimationId) return;
 
             if (shouldPauseBackground) {
-                body.style.backgroundColor = defaultColor;
-                isBackgroundFlashing = false;
                 await new Promise(resolve => setTimeout(resolve, 100));
-                runPattern();
-                return;
+                continue;
             }
 
-            const char = config.pattern[i];
-            body.style.backgroundColor = currentColor;
+            // Wait until start time
+            const now = Date.now();
+            const waitTime = startTime - now;
+            if (waitTime > 0) {
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
 
-            const duration = char === '.' ? Duration.DOT : char === '-' ? Duration.DASH : 0;
-            await new Promise(resolve => setTimeout(resolve, duration));
+            // Check again after waiting
+            if (animationId !== currentAnimationId) return;
+            if (shouldPauseBackground) continue;
 
-            currentColor = currentColor === color1Value ? color2Value : color1Value;
+            // Start flashing
+            isBackgroundFlashing = true;
+            if (phoneHolder) phoneHolder.style.color = 'white';
+            setState(State.RUNNING);
+
+            // Run the pattern
+            let currentColor = color1Value;
+            for (let i = 0; i < config.pattern.length; i++) {
+                if (animationId !== currentAnimationId) {
+                    body.style.backgroundColor = defaultColor;
+                    isBackgroundFlashing = false;
+                    return;
+                }
+
+                if (shouldPauseBackground) {
+                    body.style.backgroundColor = defaultColor;
+                    isBackgroundFlashing = false;
+                    break;
+                }
+
+                const char = config.pattern[i];
+                body.style.backgroundColor = currentColor;
+
+                const duration = char === '.' ? Duration.DOT : char === '-' ? Duration.DASH : 0;
+                await new Promise(resolve => setTimeout(resolve, duration));
+
+                // Gap between elements
+                body.style.backgroundColor = defaultColor;
+                if (i < config.pattern.length - 1) {
+                    await new Promise(resolve => setTimeout(resolve, Duration.BETWEEN));
+                }
+
+                currentColor = currentColor === color1Value ? color2Value : color1Value;
+            }
+
+            // Pattern complete
+            body.style.backgroundColor = defaultColor;
+            isBackgroundFlashing = false;
+
+            // Wait for next cycle
+            const nextStartTime = getNextStartTime(config.timeOffset);
+            const delayUntilNext = nextStartTime - Date.now();
+            if (delayUntilNext > 0) {
+                await new Promise(resolve => setTimeout(resolve, delayUntilNext));
+            }
         }
-
-        // Pattern complete
-        body.style.backgroundColor = defaultColor;
-        isBackgroundFlashing = false;
-
-        // Wait for next cycle
-        const nextStartTime = getNextStartTime(config.timeOffset);
-        const delayUntilNext = nextStartTime - Date.now();
-        if (delayUntilNext > 0) {
-            await new Promise(resolve => setTimeout(resolve, delayUntilNext));
-        }
-
-        runPattern();
     }
 
     runPattern();
@@ -441,27 +448,20 @@ function generateShareUrl(): string | undefined {
     return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
 }
 
-function encodeUrl(): string | undefined {
-    const url = generateShareUrl();
-    if (url && currentRole === Role.RECEIVER) {
-        window.history.replaceState({}, '', url);
-    }
-    return url;
-}
-
 function decodeUrl(): BlinkConfig | null {
     const params = new URLSearchParams(window.location.search);
     if (!params.has('c1') || !params.has('c2') || !params.has('p') || !params.has('t')) {
         return null;
     }
 
-    const color1Index = parseInt(params.get('c1')!);
-    const color2Index = parseInt(params.get('c2')!);
-    const patternIndex = parseInt(params.get('p')!);
-    const timeOffset = parseInt(params.get('t')!);
+    const color1Index = parseInt(params.get('c1')!, 10);
+    const color2Index = parseInt(params.get('c2')!, 10);
+    const patternIndex = parseInt(params.get('p')!, 10);
+    const timeOffset = parseInt(params.get('t')!, 10);
 
     // Validate indices
-    if (color1Index < 0 || color1Index >= COLORS.length ||
+    if ([color1Index, color2Index, patternIndex, timeOffset].some(Number.isNaN) ||
+        color1Index < 0 || color1Index >= COLORS.length ||
         color2Index < 0 || color2Index >= COLORS.length ||
         patternIndex < 0 || patternIndex >= PATTERNS.length ||
         timeOffset < 0 || timeOffset > 9) {

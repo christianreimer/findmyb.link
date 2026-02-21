@@ -51,7 +51,6 @@ jobs:
           [ -f code.js ] && cp code.js dist/ || true
           [ -f assets/preview.png ] && cp assets/preview.png dist/ || true
           [ -f penguins.mp4 ] && cp penguins.mp4 dist/ || true
-          [ -f app.css ] && cp app.css dist/ || true
 
       - name: Inject version into HTML
         run: |
