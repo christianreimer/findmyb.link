@@ -4,6 +4,7 @@ interface BlinkConfig {
     color2: string;
     pattern: string;
     timeOffset: number;
+    createdAt?: number;
 }
 
 interface ColorPair {
@@ -73,6 +74,8 @@ const countdownText = getRequiredElement('countdownText');
 const instructions = getRequiredElement('instructions');
 
 // Constants for instruction text
+const EXPIRY_MINUTES = 5;
+
 const INSTRUCTIONS = {
     INITIATOR: `
         <h2 class="text-xl font-bold">How to use</h2>
@@ -90,6 +93,13 @@ const INSTRUCTIONS = {
         <h2 class="text-xl font-bold">How to use</h2>
         <div class="text-sm">
             <p class="mt-2">Click the play button above. This will start a synchronized Find My Blink (pattern and colors).</p>
+        </div>
+    `,
+    EXPIRED: `
+        <h2 class="text-xl font-bold">Link expired</h2>
+        <div class="text-sm">
+            <p class="mt-2">This Find My Blink link has expired. Ask the sender to generate a new one.</p>
+            <button id="resetButton" class="btn btn-primary mt-4">Start fresh</button>
         </div>
     `
 };
@@ -442,7 +452,8 @@ function generateShareUrl(): string | undefined {
         c1: COLORS.indexOf(blinkConfig.color1).toString(),
         c2: COLORS.indexOf(blinkConfig.color2).toString(),
         p: PATTERNS.indexOf(blinkConfig.pattern).toString(),
-        t: blinkConfig.timeOffset.toString()
+        t: blinkConfig.timeOffset.toString(),
+        ts: Math.floor(Date.now() / 1000).toString()
     });
 
     return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
@@ -468,12 +479,21 @@ function decodeUrl(): BlinkConfig | null {
         return null;
     }
 
-    return {
+    const config: BlinkConfig = {
         color1: COLORS[color1Index],
         color2: COLORS[color2Index],
         pattern: PATTERNS[patternIndex],
         timeOffset: timeOffset
     };
+
+    if (params.has('ts')) {
+        const ts = parseInt(params.get('ts')!, 10);
+        if (!Number.isNaN(ts)) {
+            config.createdAt = ts;
+        }
+    }
+
+    return config;
 }
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -485,10 +505,22 @@ window.addEventListener('DOMContentLoaded', () => {
 
     const decodedConfig = decodeUrl();
     if (decodedConfig) {
-        blinkConfig = decodedConfig;
-        currentRole = Role.RECEIVER;
-        // console.log('Receiver mode: blinkConfig loaded from URL', blinkConfig);
-        instructions.innerHTML = INSTRUCTIONS.RECEIVER;
+        const isExpired = decodedConfig.createdAt !== undefined &&
+            (Math.floor(Date.now() / 1000) - decodedConfig.createdAt) > EXPIRY_MINUTES * 60;
+
+        if (isExpired) {
+            playButton.classList.add('hidden');
+            instructions.innerHTML = INSTRUCTIONS.EXPIRED;
+            const resetButton = document.getElementById('resetButton');
+            resetButton?.addEventListener('click', () => {
+                window.location.href = window.location.pathname;
+            });
+        } else {
+            blinkConfig = decodedConfig;
+            currentRole = Role.RECEIVER;
+            // console.log('Receiver mode: blinkConfig loaded from URL', blinkConfig);
+            instructions.innerHTML = INSTRUCTIONS.RECEIVER;
+        }
     }
 
     const words = ['friend', 'bestie', 'soulmate', 'bae', 'partner'];
